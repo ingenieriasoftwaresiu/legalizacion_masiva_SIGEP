@@ -1,0 +1,316 @@
+Option Explicit
+Dim con As New ADODB.Connection
+
+Public Sub generarLegalizaciones()
+
+    Dim strRutaArchivoFacturas, strBDFuente, strControl, strSigepCxC, strSigepIngreso, strQueryCxC As String, strQueryIngreso As String, strCodCxC As String
+    Dim strCodProyecto, strCodRubro, strCodSubrubro, strEntidad, strCentroCostos, strTipo, strReserva, strFecha As String, strValorCxC, strValorIngreso, strNroFactura As String, strNroSoporte As String, strTipoSoporte, strObs As String
+    Dim intError, intFila, intColumnaControlCxC, intColumnaControlIngreso, intAfectados, intUltimaColumna, intNroResultados As Integer
+    Dim lngDiferencia As Long
+    Dim archivoProcesar As Workbook
+    Dim hojaProcesar As Worksheet
+    Dim app As New Excel.Application
+    Dim rs As ADODB.Recordset
+    
+    On Error GoTo errHandler
+    
+    strRutaArchivoFacturas = Trim(Hoja1.Cells(2, 1))
+    
+    If (strRutaArchivoFacturas = "") Then
+        MsgBox "No se ha configurado la ruta del archivo de facturación en la hoja de Parámetros!", vbExclamation, "Validación"
+        Exit Sub
+    End If
+    
+    intError = 1
+    Application.ScreenUpdating = False
+    app.Visible = False
+    Set archivoProcesar = Workbooks.Open(strRutaArchivoFacturas, , False)
+    Set hojaProcesar = archivoProcesar.Sheets(2)
+    intColumnaControlCxC = CInt(Trim(Hoja1.Cells(2, 3)))
+    intColumnaControlIngreso = CInt(Trim(Hoja1.Cells(2, 4)))
+    intUltimaColumna = intColumnaControlIngreso + 1
+    
+    hojaProcesar.Cells(3, intUltimaColumna) = "OBSERVACIÓN PROCESO CXC"
+    hojaProcesar.Cells(3, intUltimaColumna + 1) = "OBSERVACIÓN PROCESO INGRESO"
+    strBDFuente = Trim(CStr(Hoja1.Cells(2, 2)))
+    
+    If strBDFuente = "" Or strBDFuente = vbNullString Then
+            MsgBox "No se encuentra configurada la fuente de datos en la hoja de Parámetros. " & _
+                   "Por lo tanto, el proceso no continuará.", vbExclamation, "Advertencia del sistema"
+            Exit Sub
+    End If
+    
+    intError = 2
+    con.Open strBDFuente
+    
+    If con.State = 1 Then
+    
+        intError = 3
+        
+        ' Se procesan las CxC
+     
+        intFila = 4
+        strControl = Trim(hojaProcesar.Cells(intFila, 1))
+        
+        Do While (strControl <> "")
+        
+            strSigepCxC = Trim(hojaProcesar.Cells(intFila, intColumnaControlCxC))
+                   
+            If (strSigepCxC = "S") Then
+                hojaProcesar.Cells(intFila, intUltimaColumna) = "Ya fue procesada anteriormente"
+                GoTo siguienteCxC
+            End If
+            
+            If (strSigepCxC = "" Or strSigepCxC = "N") Then
+            
+                strCodProyecto = "4-" + Trim(hojaProcesar.Cells(intFila, 5))
+                strCodRubro = "10"
+                strCodSubrubro = "13"
+                strEntidad = Trim(hojaProcesar.Cells(intFila, 6))
+                strCentroCostos = Trim(hojaProcesar.Cells(intFila, 3))
+                strTipo = "CuentasXCobrar"
+                strReserva = "-"
+                strFecha = Trim(hojaProcesar.Cells(intFila, 14))
+                
+                If (strFecha = "") Then
+                    hojaProcesar.Cells(intFila, intUltimaColumna) = "El registro no cuenta con fecha de factura"
+                    GoTo siguienteCxC
+                End If
+                
+                strFecha = formatearFecha(strFecha)
+                strValorCxC = Trim(hojaProcesar.Cells(intFila, 10))
+                
+                If (strValorCxC = "0" Or strValorCxC = "") Then
+                    hojaProcesar.Cells(intFila, intUltimaColumna) = "El valor de la CxC se encuentra en cero o vacío"
+                    GoTo siguienteCxC
+                End If
+                
+                ' Validación de existencia previa de la factura
+                
+                strNroSoporte = Trim(hojaProcesar.Cells(intFila, 13))
+                
+                Set rs = buscarCxCXFactura(strNroSoporte, con)
+                intNroResultados = contarNroResultados(rs)
+                                          
+                If (intNroResultados >= 1) Then
+                    hojaProcesar.Cells(intFila, intUltimaColumna) = "Ya se encuentra creada una CxC para la factura " + strNroSoporte
+                    hojaProcesar.Cells(intFila, intColumnaControlCxC) = "S"
+                    GoTo siguienteCxC
+                End If
+                
+                strTipoSoporte = "Factura"
+                strObs = "PAGO ANALISIS FACTURA " + strNroSoporte
+                
+                strQueryCxC = "INSERT INTO sigap_movimientos(Proyecto,Rubro,Subrubro,EntidadFinanciadora,CentroCosto,Tipo,Reserva,Fecha,Valor,NumeroSoporte,TipoSoporte,Observacion) " & _
+                                          "VALUES ('" + strCodProyecto + "', '" + strCodRubro + "', '" + strCodSubrubro + "', '" + strEntidad + "', '" + strCentroCostos + "', '" + strTipo + "', '" + strReserva + "', '" + strFecha & _
+                                          "', '" + strValorCxC + "', '" + strNroSoporte + "', '" + strTipoSoporte + "', '" + strObs + "');"
+                              
+                intError = 3
+                intAfectados = executeSQL(strQueryCxC, con)
+                
+                If (intAfectados >= 1) Then
+                    hojaProcesar.Cells(intFila, intUltimaColumna) = "Ok"
+                    hojaProcesar.Cells(intFila, intColumnaControlCxC) = "S"
+                Else
+                    hojaProcesar.Cells(intFila, intUltimaColumna) = "La CxC NO se ingresó en el SIGEP"
+                End If
+                
+            End If
+                          
+siguienteCxC:
+        
+            intFila = intFila + 1
+            strControl = Trim(hojaProcesar.Cells(intFila, 1))
+            strQueryCxC = ""
+            strCodProyecto = ""
+            strCodRubro = ""
+            strCodSubrubro = ""
+            strEntidad = ""
+            strCentroCostos = ""
+            strTipo = ""
+            strReserva = "-"
+            strFecha = ""
+            strValorCxC = ""
+            strNroSoporte = ""
+            strTipoSoporte = ""
+            strObs = ""
+            intAfectados = 0
+        
+        Loop
+                        
+ingresos:
+        
+        ' Se procesan los Ingresos
+        
+        intError = 4
+        
+        intFila = 4
+        strControl = Trim(hojaProcesar.Cells(intFila, 1))
+        intNroResultados = 0
+        
+        Do While (strControl <> "")
+            
+            strSigepIngreso = Trim(hojaProcesar.Cells(intFila, intColumnaControlIngreso))
+            
+            If (strSigepIngreso = "S") Then
+                hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "Ya fue procesado anteriormente"
+                GoTo siguienteIngreso
+            End If
+                   
+            If (strSigepIngreso = "" Or strSigepIngreso = "N") Then
+                
+                strNroSoporte = Trim(hojaProcesar.Cells(intFila, 13))
+                Set rs = buscarCxCXFactura(strNroSoporte, con)
+                intNroResultados = contarNroResultados(rs)
+                
+                If (intNroResultados <= 0) Then
+                    hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "No se recuperó una CxC para la factura " + strNroSoporte
+                    GoTo siguienteIngreso
+                End If
+                
+                If (intNroResultados > 1) Then
+                    hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "Se recuperó más de una CxC para la factura " + strNroSoporte
+                    GoTo siguienteIngreso
+                End If
+                
+                If Not (rs.EOF) Then
+                                                                              
+                    strCodCxC = rs(0)
+                    strCodProyecto = rs(1)
+                    strCodRubro = "1"
+                    strCodSubrubro = rs(3)
+                    strEntidad = rs(4)
+                    strCentroCostos = rs(5)
+                    strTipo = "Ingreso"
+                    strReserva = strCodCxC
+                    strFecha = Trim(hojaProcesar.Cells(intFila, 16))
+                    strObs = "LEGALIZACION " + rs(12)
+                    
+                    If (strFecha = "") Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "El registro no cuenta con fecha de comprobante de ingreso"
+                        GoTo siguienteIngreso
+                    End If
+	      
+	      If (Not (IsDate(strFecha))) Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "La fecha del comprobante de ingreso no es correcta"
+                        GoTo siguienteIngreso
+                    End If
+                    
+                    strFecha = formatearFecha(strFecha)
+                    strValorIngreso = Trim(hojaProcesar.Cells(intFila, 17))
+                    strNroSoporte = Trim(hojaProcesar.Cells(intFila, 15))
+                    strValorCxC = CStr(rs(9))
+                    strNroFactura = Trim(hojaProcesar.Cells(intFila, 13))
+                    
+                    If (Not (IsNumeric(strNroSoporte))) Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "El comprobante de ingreso no es correcto"
+                        GoTo siguienteIngreso
+                    End If
+                    
+                    ' Validación de existencia previa del comprobante de ingreso
+                    
+                    Set rs = buscarIngresoXCompIngresoYFactura(strNroSoporte, strNroFactura, con)
+                    intNroResultados = contarNroResultados(rs)
+                                              
+                    If (intNroResultados >= 1) Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "Ya se encuentra creado un ingreso para el comprobante " + strNroSoporte + " y la factura " + strNroFactura
+                        hojaProcesar.Cells(intFila, intColumnaControlIngreso) = "S"
+                        GoTo siguienteIngreso
+                    End If
+                    
+                    strTipoSoporte = "Comprobante de Ingreso"
+                                                            
+                    If (strValorIngreso = "" Or strValorIngreso = "0") Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "El valor del ingreso no es correcto"
+                        GoTo siguienteIngreso
+                    End If
+                    
+                    If (CLng(strValorCxC) <= 0 Or CLng(strValorIngreso) > CLng(strValorCxC)) Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "No se cuenta con saldo suficiente en la CxC para crear el ingreso"
+                        GoTo siguienteIngreso
+                    End If
+                    
+                    lngDiferencia = CLng(strValorCxC) - CLng(strValorIngreso)
+                    
+                    If (lngDiferencia < 0) Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "El valor del ingreso es mayor al valor de la CxC"
+                        GoTo siguienteIngreso
+                    End If
+                    
+                    strQueryIngreso = "INSERT INTO sigap_movimientos(Proyecto,Rubro,Subrubro,EntidadFinanciadora,CentroCosto,Tipo,Reserva,Fecha,Valor,NumeroSoporte,TipoSoporte,Observacion) " & _
+                                              "VALUES ('" + strCodProyecto + "', '" + strCodRubro + "', '" + strCodSubrubro + "', '" + strEntidad + "', '" + strCentroCostos + "', '" + strTipo + "', '" + strReserva + "', '" + strFecha & _
+                                              "', '" + strValorIngreso + "', '" + strNroSoporte + "', '" + strTipoSoporte + "', '" + strObs + "');"
+                                                                
+                    intError = 4
+                    intAfectados = executeSQL(strQueryIngreso, con)
+                    
+                    If (intAfectados >= 1) Then
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "Ok"
+                        hojaProcesar.Cells(intFila, intColumnaControlIngreso) = "S"
+                        intAfectados = actualizarCxC(strCodCxC, CStr(lngDiferencia), con)
+                        
+                        If (intAfectados >= 1) Then
+                            hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "Se actualizó el valor de la CxC"
+                        Else
+                            hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "No se actualizó el valor de la CxC"
+                        End If
+                    Else
+                        hojaProcesar.Cells(intFila, intUltimaColumna + 1) = "El ingreso NO se registró en el SIGEP"
+                    End If
+                End If
+                
+            End If
+            
+siguienteIngreso:
+        
+            intFila = intFila + 1
+            strControl = Trim(hojaProcesar.Cells(intFila, 1))
+            strCodProyecto = ""
+            strCodRubro = ""
+            strCodSubrubro = ""
+            strEntidad = ""
+            strCentroCostos = ""
+            strTipo = ""
+            strReserva = "-"
+            strFecha = ""
+            strValorIngreso = ""
+            strValorCxC = ""
+            strNroSoporte = ""
+            strTipoSoporte = ""
+            strObs = ""
+            intAfectados = 0
+            
+        Loop
+    
+        con.Close
+    End If
+    
+    intError = 5
+    archivoProcesar.Close Savechanges:=True
+    Application.ScreenUpdating = True
+    MsgBox "El proceso de legalización masiva finalizó correctamente!", vbInformation, "Confirmación"
+    Exit Sub
+    
+errHandler:
+
+    Dim strMsg As String
+    
+    Select Case intError
+        Case 1: strMsg = "Se generó un error intentando abrir el archivo de facturación"
+        Case 2: strMsg = "Se generó un error intentando abrir la conexión a la base de datos"
+        Case 3: strMsg = "Se generó un error intentando ingresar la CxC al SIGEP"
+            hojaProcesar.Cells(intFila, intUltimaColumna) = strMsg
+            'GoTo siguienteCxC
+        Case 4: strMsg = "Se generó un error intentando ingresar el ingreso al SIGEP"
+            hojaProcesar.Cells(intFila, intUltimaColumna + 1) = strMsg
+            GoTo siguienteIngreso
+        Case 5: strMsg = "Se generó un error intentando cerrar el archivo de facturación"
+    End Select
+    
+    If (con.State = 1) Then
+        con.Close
+    End If
+    
+    MsgBox strMsg, vbCritical, "Error"
+    
+End Sub
